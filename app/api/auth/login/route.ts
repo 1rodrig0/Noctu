@@ -1,62 +1,65 @@
-// app/api/auth/login/route.ts
 import { createClient } from '@/lib/supabase/server'
-import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { loginSchema } from '@/lib/validations/auth'
 
 export async function POST(request: Request) {
   try {
-    // Validar el body
+    // 1. Validar el body con Zod
     const body = await request.json()
     const validatedData = loginSchema.parse(body)
 
-    // Crear cliente Supabase server (exactamente igual que en register)
+    // 2. Crear cliente Supabase (Server Component / Route Handler)
     const supabase = await createClient()
 
-    // Iniciar sesión
-    const { data, error } = await supabase.auth.signInWithPassword({
+    // 3. Iniciar sesión en Auth
+    const { data, error: authError } = await supabase.auth.signInWithPassword({
       email: validatedData.email,
       password: validatedData.password,
     })
 
-    if (error) {
+    if (authError) {
       return NextResponse.json(
-        { error: 'Credenciales inválidas' }, 
+        { error: 'Credenciales inválidas o cuenta no confirmada' }, 
         { status: 401 }
       )
     }
 
-    // Obtener perfil
+    // 4. Intentar obtener el perfil de la tabla 'profiles'
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', data.user.id)
       .single()
 
-    if (profileError) {
-      return NextResponse.json(
-        { error: 'No se pudo obtener el perfil del usuario' },
-        { status: 500 }
-      )
+    // 5. Manejo inteligente: Si no hay perfil en la tabla, usamos los metadatos de Auth
+    // Esto evita que el login falle si el Trigger de la DB tardó unos milisegundos
+    const finalProfile = profile || {
+      full_name: data.user.user_metadata?.full_name,
+      role: data.user.user_metadata?.role,
+      student_code: data.user.user_metadata?.student_code,
+      phone: data.user.user_metadata?.phone,
     }
 
-    // Respuesta OK
+    // 6. Respuesta Exitosa
     return NextResponse.json({
       message: 'Inicio de sesión exitoso',
       user: data.user,
-      profile,
-    })
+      profile: finalProfile,
+    }, { status: 200 })
 
   } catch (error: any) {
-    if (error.errors) {
+    // Manejo de errores de validación de Zod
+    if (error.name === 'ZodError') {
       return NextResponse.json(
-        { error: 'Validación fallida', details: error.errors },
+        { error: 'Datos de entrada no válidos', details: error.errors },
         { status: 400 }
       )
     }
 
+    // Error genérico del servidor
+    console.error('Login Error:', error)
     return NextResponse.json(
-      { error: 'Error al iniciar sesión' },
+      { error: 'Error interno al procesar el inicio de sesión' },
       { status: 500 }
     )
   }
